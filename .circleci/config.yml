@@ -1,0 +1,91 @@
+version: 2
+
+jobs:
+  version_setting:
+    docker:
+      - image: circleci/ruby:2.5.1
+
+    steps:
+      - checkout
+
+      - run:
+          name: set version
+          command: ruby create-version.rb
+
+      - run:
+          name: Error Check
+          command: |
+            if [ -f exit_message ]; then
+              echo `cat exit_message`
+              circleci step halt
+            fi
+
+      - persist_to_workspace:
+          root: .
+          paths:
+            - .
+  build:
+    docker:
+      - image: circleci/android:api-29
+
+    environment:
+      JVM_OPTS: -Xmx3200m
+
+    steps:
+      - attach_workspace:
+          at: .
+
+      - restore_cache:
+          key: jars-{{ checksum "build.gradle" }}-{{ checksum  "app/build.gradle" }}
+      - run:
+          name: gradle dependencies
+          command: ./gradlew androidDependencies
+      - save_cache:
+          paths: ~/.gradle
+          key: jars-{{ checksum "build.gradle" }}-{{ checksum  "app/build.gradle" }}
+      - run:
+          name: Build apk
+          command: ./gradlew :app:assembleRelease
+
+      - persist_to_workspace:
+          root: .
+          paths:
+            - .
+
+  deploy:
+    docker:
+      - image: circleci/ruby:2.5.1
+
+    steps:
+      - attach_workspace:
+          at: .
+
+      - run:
+          name: bundler
+          command: bundle install
+
+      - restore_cache:
+          key: gem-cache-{{ arch }}-{{ .Branch }}-{{ checksum "Gemfile.lock" }}
+      - run:
+          name: up play store
+          command: bundle exec fastlane play_store
+      - save_cache:
+          key: gem-cache-{{ arch }}-{{ .Branch }}-{{ checksum "Gemfile.lock" }}
+          paths: vendor/bundle
+
+workflows:
+  version: 2
+  build_and_deploy:
+    jobs:
+      - version_setting:
+          filters:
+            tags:
+              only: /v.*/
+            branches:
+              ignore: /.*/
+      - build:
+          requires:
+            - version_setting
+      - deploy:
+          requires:
+            - build
